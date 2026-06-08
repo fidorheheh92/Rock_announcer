@@ -1,17 +1,4 @@
-// ==UserScript==
-// @name         Rock Weao Announcer
-// @namespace    https://keys.weao.gg/
-// @version      2.7.0
-// @description  Announces available IDE licences on keys.weao.gg
-// @author       Rock
-// @match        https://keys.weao.gg/*
-// @grant        GM_notification
-// @grant        GM_openInTab
-// @grant        GM_getValue
-// @grant        GM_setValue
-// @grant        GM_addStyle
-// @run-at       document-idle
-// ==/UserScript==
+
 
 (function () {
   'use strict';
