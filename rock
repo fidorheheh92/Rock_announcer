@@ -1,0 +1,1393 @@
+// ==UserScript==
+// @name         Rock Weao Announcer
+// @namespace    https://keys.weao.gg/
+// @version      2.7.0
+// @description  Announces available IDE licences on keys.weao.gg
+// @author       Rock
+// @match        https://keys.weao.gg/*
+// @grant        GM_notification
+// @grant        GM_openInTab
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_addStyle
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  
+  const PRODUCTS = {
+    volt: {
+      label: 'Volt', color: '#8b5cf6',
+      variants: {
+        '7d': { label: '7 Days', enabled: true, durationKw: '7 days' },
+        '1mo': { label: '1 Month', enabled: true, durationKw: '1 month' },
+        '3mo': { label: '3 Months', enabled: true, durationKw: '3 months' }
+      }
+    },
+    seliware: {
+      label: 'Seliware', color: '#3b82f6',
+      variants: {
+        '7d': { label: '7 Days', enabled: true, durationKw: '7 days' },
+        '1mo': { label: '1 Month', enabled: true, durationKw: '1 month' }
+      }
+    },
+    matcha: {
+      label: 'Matcha', color: '#22c55e',
+      variants: {
+        lifetime: { label: 'Lifetime', enabled: true, durationKw: 'lifetime' }
+      }
+    },
+    matchabeta: {
+      label: 'Matcha Beta', color: '#a3e635',
+      variants: {
+        lifetime: { label: 'Lifetime', enabled: true, durationKw: 'lifetime' }
+      }
+    },
+    potassium: {
+      label: 'Potassium', color: '#9ca3af',
+      variants: {
+        lifetime: { label: 'Lifetime', enabled: true, durationKw: 'lifetime' }
+      }
+    },
+    synz: {
+      label: 'Syn-Z', color: '#f8fafc', textColor: '#0f172a',
+      variants: {
+        '7d': { label: '7 Days', enabled: true, durationKw: '7 days' },
+        '1mo': { label: '1 Month', enabled: true, durationKw: '1 month' }
+      }
+    },
+    serotonin: {
+      label: 'Serotonin', color: '#16a34a',
+      variants: {
+        '1mo': { label: '1 Month', enabled: true, durationKw: '1 month' }
+      }
+    },
+    lumen: {
+      label: 'Lumen', color: '#818cf8',
+      variants: {
+        '7d': { label: '7 Days', enabled: true, durationKw: '7 days' },
+        '1mo': { label: '1 Month', enabled: true, durationKw: '1 month' }
+      }
+    }
+  };
+
+  // ─── SETTINGS SAVE FEATUR ────────────────────────────────────────────────
+  const DEFAULTS = { pollInterval: 4000, playSoundAlert: true, browserNotif: true, autoOpenTab: true, alertForUnknown: false };
+  let SETTINGS = Object.assign({}, DEFAULTS, GM_getValue('rwa_settings', {}));
+  function saveSetting(k, v) { SETTINGS[k] = v; GM_setValue('rwa_settings', SETTINGS); }
+
+  const savedVariants = GM_getValue('rwa_variants', null);
+  if (savedVariants) {
+    for (const [pk, pdata] of Object.entries(savedVariants)) {
+      if (PRODUCTS[pk]) {
+        for (const [vk, enabled] of Object.entries(pdata)) {
+          if (PRODUCTS[pk].variants[vk]) PRODUCTS[pk].variants[vk].enabled = enabled;
+        }
+      }
+    }
+  }
+  function saveVariants() {
+    const out = {};
+    for (const [pk, pdata] of Object.entries(PRODUCTS)) {
+      out[pk] = {};
+      for (const [vk, v] of Object.entries(pdata.variants)) out[pk][vk] = v.enabled;
+    }
+    GM_setValue('rwa_variants', out);
+  }
+
+  // ─── STATE ────────────────────────────────────────────────────
+  let seenLicences = new Set(GM_getValue('seenLicences', []));
+  let monitorActive = false;
+  let activeTab = 'monitor';
+  let uiPanel = null;
+  let isMinimized = false;
+
+  // ─── ICONS (SVG strings) ──────────────────────────────────────
+  const ICON_MONITOR = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>';
+  const ICON_PREFS = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+  const ICON_MINIMIZE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14"/></svg>';
+  const ICON_EXPAND = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+  const ICON_CHECK = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+
+  // ─── STYLES , DESIGN─────────────────────────────────────
+  GM_addStyle(`
+    @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;800&family=DM+Sans:wght@300;400;500&display=swap');
+    /* ─── Warm Design Tokens ─── */
+    :root {
+      --rwa-surface: #0d0d10;
+      --rwa-surface-raised: rgba(255,255,255,0.03);
+      --rwa-surface-hover: rgba(255, 255, 255, 0.04);
+      --rwa-surface-active: rgba(255,255,255, 0.08);
+      --rwa-border: rgba(255, 255, 255, 0.06);
+      --rwa-border-strong: rgba(255, 255, 255, 0.12);
+      --rwa-border-glow: rgba(255, 255, 255, 0.03);
+      --rwa-text: #f0eee9;
+      --rwa-text-soft: #e0e0e0;
+      --rwa-text-muted: rgba(240, 238, 233, 0.40);
+      --rwa-text-faint: rgba(240, 238, 233, 0.22);
+      --rwa-text-ghost: rgba(240, 238, 233, 0.12);
+      --rwa-blue: #60a5fa;
+      --rwa-blue-glow: rgba(96, 165, 250, 0.25);
+      --rwa-white: rgba(255,255,255,0.6);
+      --rwa-white-glow: rgba(255,255,255,0.40);
+      --rwa-green: #4ade80;
+      --rwa-green-soft: rgba(74, 222, 128, 0.15);
+      --rwa-green-glow: rgba(74, 222, 128, 0.25);
+      --rwa-gap-xs: 4px;
+      --rwa-gap-sm: 8px;
+      --rwa-gap-md: 12px;
+      --rwa-gap-lg: 16px;
+      --rwa-gap-xl: 20px;
+      --rwa-radius-sm: 8px;
+      --rwa-radius-md: 12px;
+      --rwa-radius-lg: 16px;
+      --rwa-radius-xl: 20px;
+      --rwa-radius-pill: 100px;
+      --rwa-ease: cubic-bezier(0.34, 1.56, 0.64, 1);
+      --rwa-ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+      --rwa-duration-fast: 180ms;
+      --rwa-duration-base: 280ms;
+      --rwa-duration-slow: 400ms;
+    }
+
+    /* ─── Panel ─── */
+    #rwa-panel {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 2147483647;
+      width: 325px;
+      background: var(--rwa-surface);
+      backdrop-filter: blur(24px) saturate(1.2);
+      -webkit-backdrop-filter: blur(24px) saturate(1.2);
+      border: 1px solid var(--rwa-border);
+      border-radius: var(--rwa-radius-lg);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      color: var(--rwa-text-soft);
+      box-shadow:
+        0 24px 64px rgba(0,0,0,0.55),
+        0 0 0 1px var(--rwa-border-glow),
+        inset 0 1px 0 rgba(255,255,255,0.04);
+      overflow: hidden;
+      user-select: none;
+      transition: all var(--rwa-duration-base) var(--rwa-ease-soft);
+    }
+
+    #rwa-panel.has-licence {
+      border-color: rgba(74, 222, 128, 0.35);
+      box-shadow:
+        0 24px 64px rgba(0,0,0,0.55),
+        0 0 0 1px rgba(74, 222, 128, 0.15),
+        0 0 48px rgba(74, 222, 128, 0.12),
+        inset 0 1px 0 rgba(74, 222, 128, 0.08);
+      animation: rwa-breathe 3s ease-in-out infinite;
+    }
+
+    @keyframes rwa-breathe {
+      0%, 100% { box-shadow: 0 24px 64px rgba(0,0,0,0.55), 0 0 0 1px rgba(74,222,128,0.15), 0 0 48px rgba(74,222,128,0.08), inset 0 1px 0 rgba(74,222,128,0.06); }
+      50% { box-shadow: 0 24px 64px rgba(0,0,0,0.55), 0 0 0 1px rgba(74,222,128,0.25), 0 0 64px rgba(74,222,128,0.16), inset 0 1px 0 rgba(74,222,128,0.10); }
+    }
+
+    /* ─── Header ─── */
+      #rwa-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 12px 12px 16px;
+      cursor: move;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.02);
+      flex-shrink: 0;
+    }
+
+    #rwa-header:active { cursor: grabbing; }
+
+    #rwa-header::before {
+      content: '';
+      position: absolute;
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 24px;
+      height: 4px;
+      background: rgba(255,255,255,0.08);
+      border-radius: var(--rwa-radius-pill);
+      transition: background var(--rwa-duration-fast);
+    }
+
+    #rwa-header:hover::before {
+      background: rgba(255,255,255,0.14);
+    }
+
+    #rwa-title-group {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+      #rwa-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 14px;
+      letter-spacing: -0.2px;
+      color: #fff;
+      line-height: 1;
+    }
+    #rwa-title span { color: rgba(255,255,255,0.3); font-weight: 600; }
+
+
+
+      #rwa-subtitle {
+      font-size: 9px;
+      color: rgba(255,255,255,0.16);
+      letter-spacing: 0.9px;
+      text-transform: uppercase;
+      margin-top: 3px;
+    }
+
+    #rwa-minimize-btn {
+      width: 30px;
+      height: 30px;
+      border-radius: var(--rwa-radius-sm);
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--rwa-text-faint);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all var(--rwa-duration-fast) var(--rwa-ease-soft);
+      position: relative;
+    }
+
+    #rwa-minimize-btn:hover {
+      background: var(--rwa-surface-hover);
+      border-color: var(--rwa-border);
+      color: var(--rwa-text-muted);
+      transform: translateY(-1px);
+    }
+
+    #rwa-minimize-btn:active {
+      transform: translateY(0) scale(0.95);
+    }
+
+    /* ─── Main Layout ─── */
+    #rwa-main {
+      display: flex;
+      transition: max-height var(--rwa-duration-slow) var(--rwa-ease-soft), opacity var(--rwa-duration-base) var(--rwa-ease-soft);
+      max-height: 540px;
+      opacity: 1;
+      overflow: hidden;
+    }
+
+    #rwa-main.collapsed {
+      max-height: 0;
+      opacity: 0;
+    }
+
+    /* ─── Sidebar ─── */
+    #rwa-sidebar {
+      width: 48px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: var(--rwa-gap-md) 0;
+      gap: var(--rwa-gap-sm);
+      border-right: 1px solid var(--rwa-border);
+      background: rgba(0,0,0,0.15);
+    }
+
+    .rwa-tab-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--rwa-radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--rwa-text-ghost);
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all var(--rwa-duration-fast) var(--rwa-ease-soft);
+      position: relative;
+      background: transparent;
+    }
+
+    .rwa-tab-btn:hover {
+      color: var(--rwa-text-muted);
+      background: var(--rwa-surface-hover);
+      border-color: var(--rwa-border);
+      transform: translateY(-1px);
+    }
+
+    .rwa-tab-btn:active {
+      transform: translateY(0) scale(0.92);
+    }
+
+    .rwa-tab-btn.active {
+      color: var(--rwa-text);
+      background: var(--rwa-surface-active);
+      border-color: var(--rwa-border-strong);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+
+    .rwa-tab-btn.active::before {
+      content: '';
+      position: absolute;
+      left: -1px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 3px;
+      height: 18px;
+      background: var(--rwa-white);
+      border-radius: 0 3px 3px 0;
+      box-shadow: 0 0 10px var(--rwa-white-glow);
+    }
+
+    /* ─── Content ─── */
+    #rwa-content {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .rwa-tab-pane {
+      display: none;
+      padding: var(--rwa-gap-md) var(--rwa-gap-lg);
+      animation: rwa-enter var(--rwa-duration-base) var(--rwa-ease-soft);
+    }
+
+    .rwa-tab-pane.active { display: block; }
+
+    @keyframes rwa-enter {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ─── Status Row ─── */
+    #rwa-status-row {
+      display: flex;
+      align-items: center;
+      gap: var(--rwa-gap-sm);
+      padding: 10px var(--rwa-gap-md);
+      background: var(--rwa-surface-raised);
+      border: 1px solid var(--rwa-border);
+      border-radius: var(--rwa-radius-md);
+      margin-bottom: var(--rwa-gap-md);
+      transition: all var(--rwa-duration-base) var(--rwa-ease-soft);
+    }
+
+    #rwa-status-row.found {
+      background: var(--rwa-green-soft);
+      border-color: rgba(74, 222, 128, 0.3);
+    }
+
+    #rwa-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    #rwa-dot.watching {
+      background: var(--rwa-blue);
+      animation: rwa-pulse-blue 2.4s ease-in-out infinite;
+    }
+
+    #rwa-dot.found {
+      background: var(--rwa-green);
+      animation: rwa-pulse-green 1.6s ease-in-out infinite;
+    }
+
+    #rwa-dot.idle { background: var(--rwa-text-ghost); }
+
+    @keyframes rwa-pulse-blue {
+      0%, 100% { box-shadow: 0 0 0 0 var(--rwa-blue-glow); }
+      50% { box-shadow: 0 0 0 8px rgba(96,165,250,0); }
+    }
+
+    @keyframes rwa-pulse-green {
+      0%, 100% { box-shadow: 0 0 0 0 var(--rwa-green-glow); }
+      50% { box-shadow: 0 0 0 10px rgba(74,222,128,0); }
+    }
+
+    #rwa-status-label {
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--rwa-text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: color var(--rwa-duration-fast);
+    }
+
+    #rwa-status-label.found {
+      color: var(--rwa-green);
+      font-weight: 600;
+    }
+
+    /* ─── Log ─── */
+    #rwa-log {
+      display: flex;
+      flex-direction: column;
+      gap: var(--rwa-gap-xs);
+      max-height: 150px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.06) transparent;
+      padding-right: 2px;
+    }
+
+    #rwa-log::-webkit-scrollbar { width: 4px; }
+    #rwa-log::-webkit-scrollbar-track { background: transparent; }
+    #rwa-log::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.08);
+      border-radius: var(--rwa-radius-pill);
+    }
+
+    #rwa-log-empty {
+      font-size: 12px;
+      color: var(--rwa-text-ghost);
+      font-style: italic;
+      padding: var(--rwa-gap-lg) 0;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--rwa-gap-sm);
+      flex-direction: column;
+    }
+
+    #rwa-log-empty::before {
+      content: '';
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 2px dashed var(--rwa-border-strong);
+      opacity: 0.5;
+    }
+
+    .rwa-log-entry {
+      display: flex;
+      align-items: center;
+      gap: var(--rwa-gap-sm);
+      font-size: 12px;
+      padding: 8px var(--rwa-gap-sm);
+      background: var(--rwa-surface-raised);
+      border: 1px solid var(--rwa-border);
+      border-radius: var(--rwa-radius-sm);
+      transition: all var(--rwa-duration-fast) var(--rwa-ease-soft);
+      animation: rwa-slide-in var(--rwa-duration-base) var(--rwa-ease);
+    }
+
+    .rwa-log-entry:hover {
+      background: var(--rwa-surface-hover);
+      border-color: var(--rwa-border-strong);
+      transform: translateX(3px);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+
+    @keyframes rwa-slide-in {
+      from { opacity: 0; transform: translateX(-10px) scale(0.98); }
+      to { opacity: 1; transform: translateX(0) scale(1); }
+    }
+
+    .rwa-log-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      box-shadow: 0 0 8px currentColor;
+    }
+
+    .rwa-log-time {
+      color: var(--rwa-text-faint);
+      flex-shrink: 0;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 11px;
+      letter-spacing: -0.3px;
+    }
+
+    .rwa-log-name {
+      color: var(--rwa-text-soft);
+      font-weight: 600;
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .rwa-log-var {
+      color: var(--rwa-text);
+      font-size: 10px;
+      font-weight: 700;
+      background: rgba(255,255,255,0.08);
+      padding: 2px 8px;
+      border-radius: var(--rwa-radius-pill);
+      border: 1px solid var(--rwa-border);
+      flex-shrink: 0;
+    }
+
+    /* ─── Preferences ─── */
+    #rwa-prefs-scroll {
+      max-height: 380px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.06) transparent;
+      padding-right: 2px;
+    }
+
+    #rwa-prefs-scroll::-webkit-scrollbar { width: 4px; }
+    #rwa-prefs-scroll::-webkit-scrollbar-track { background: transparent; }
+    #rwa-prefs-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.08);
+      border-radius: var(--rwa-radius-pill);
+    }
+
+    .rwa-sec-label {
+      font-size: 10px;
+      color: var(--rwa-text-faint);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: var(--rwa-gap-sm);
+      display: flex;
+      align-items: center;
+      gap: var(--rwa-gap-sm);
+    }
+
+    .rwa-sec-label::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--rwa-border);
+    }
+
+    .rwa-prod-block {
+      margin-bottom: var(--rwa-gap-md);
+      padding: var(--rwa-gap-md);
+      background: var(--rwa-surface-raised);
+      border-radius: var(--rwa-radius-md);
+      border: 1px solid var(--rwa-border);
+      transition: all var(--rwa-duration-fast) var(--rwa-ease-soft);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .rwa-prod-block::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: var(--rwa-gap-md);
+      bottom: var(--rwa-gap-md);
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: var(--rwa-prod-color, transparent);
+      opacity: 0.6;
+      transition: opacity var(--rwa-duration-fast);
+    }
+
+    .rwa-prod-block:hover {
+      border-color: var(--rwa-border-strong);
+      background: rgba(255,255,255,0.03);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
+    .rwa-prod-block:hover::before {
+      opacity: 1;
+    }
+
+    .rwa-prod-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--rwa-gap-sm);
+    }
+
+    .rwa-prod-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--rwa-text-soft);
+      display: flex;
+      align-items: center;
+      gap: var(--rwa-gap-sm);
+    }
+
+    .rwa-prod-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      box-shadow: 0 0 10px currentColor;
+      transition: transform var(--rwa-duration-fast) var(--rwa-ease);
+    }
+
+    .rwa-prod-block:hover .rwa-prod-dot {
+      transform: scale(1.25);
+    }
+
+    .rwa-prod-all {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--rwa-text-faint);
+      cursor: pointer;
+      padding: 4px 10px;
+      border-radius: var(--rwa-radius-sm);
+      background: var(--rwa-surface-hover);
+      border: 1px solid var(--rwa-border);
+      transition: all var(--rwa-duration-fast) var(--rwa-ease-soft);
+      user-select: none;
+      letter-spacing: 0.3px;
+    }
+
+    .rwa-prod-all:hover {
+      color: var(--rwa-text-muted);
+      background: var(--rwa-surface-active);
+      border-color: var(--rwa-border-strong);
+      transform: translateY(-1px);
+    }
+
+    .rwa-prod-all:active {
+      transform: translateY(0) scale(0.96);
+    }
+
+    .rwa-variants {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--rwa-gap-sm);
+    }
+
+    .rwa-vchip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px 5px 10px;
+      border-radius: var(--rwa-radius-pill);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1.5px solid transparent;
+      background: var(--rwa-surface-hover);
+      color: var(--rwa-text-faint);
+      transition: all var(--rwa-duration-fast) var(--rwa-ease);
+      user-select: none;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .rwa-vchip:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+
+    .rwa-vchip:active {
+      transform: translateY(0) scale(0.96);
+    }
+
+    .rwa-vchip.on {
+      opacity: 1;
+      background: var(--rwa-prod-color, var(--rwa-surface-active));
+      border-color: var(--rwa-prod-color, transparent);
+      color: #fff;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25), 0 0 0 1px rgba(255,255,255,0.08);
+    }
+
+    .rwa-vchip.on .rwa-vdot {
+      background: #fff;
+      box-shadow: 0 0 6px rgba(255,255,255,0.4);
+    }
+
+    .rwa-vdot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: currentColor;
+      opacity: 0.6;
+      transition: all var(--rwa-duration-fast);
+    }
+
+    .rwa-divider {
+      height: 1px;
+      background: var(--rwa-border);
+      margin: var(--rwa-gap-md) 0;
+      position: relative;
+    }
+
+    .rwa-s-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--rwa-gap-sm) 0;
+      gap: var(--rwa-gap-md);
+    }
+
+    .rwa-s-label {
+      font-size: 12.5px;
+      color: var(--rwa-text-soft);
+      font-weight: 500;
+      line-height: 1.4;
+      flex: 1;
+    }
+
+    .rwa-s-label small {
+      display: block;
+      font-size: 11px;
+      color: var(--rwa-text-faint);
+      margin-top: 2px;
+      font-weight: 400;
+    }
+
+    /* ─── Toggle Switch ─── */
+    .rwa-toggle {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+
+    .rwa-toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+      position: absolute;
+    }
+
+    .rwa-toggle-track {
+      position: absolute;
+      inset: 0;
+      background: var(--rwa-surface-hover);
+      border-radius: var(--rwa-radius-pill);
+      transition: all var(--rwa-duration-fast) var(--rwa-ease-soft);
+      border: 1px solid var(--rwa-border);
+    }
+
+    .rwa-toggle input:checked + .rwa-toggle-track {
+      background: var(--rwa-blue);
+      border-color: var(--rwa-blue);
+      box-shadow: 0 0 16px var(--rwa-blue-glow);
+    }
+
+    .rwa-toggle-track::after {
+      content: '';
+      position: absolute;
+      left: 2px;
+      top: 2px;
+      width: 16px;
+      height: 16px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform var(--rwa-duration-fast) var(--rwa-ease);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+
+    .rwa-toggle input:checked + .rwa-toggle-track::after {
+      transform: translateX(18px);
+      box-shadow: 0 1px 6px rgba(0,0,0,0.4);
+    }
+
+    /* ─── Select ─── */
+    .rwa-select {
+      background: var(--rwa-surface-raised);
+      border: 1px solid var(--rwa-border);
+      border-radius: var(--rwa-radius-sm);
+      color: var(--rwa-text-soft);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 10px;
+      cursor: pointer;
+      outline: none;
+      transition: all var(--rwa-duration-fast) var(--rwa-ease-soft);
+    }
+
+    .rwa-select:hover {
+      border-color: var(--rwa-border-strong);
+      background: var(--rwa-surface-hover);
+    }
+
+    .rwa-select:focus {
+      border-color: var(--rwa-white);
+      box-shadow: 0 0 0 3px var(--rwa-white-glow);
+    }
+
+    .rwa-select option {
+      background: #1e1e26;
+      color: var(--rwa-text-soft);
+    }
+
+    /* ─── Reset Button ─── */
+    #rwa-reset {
+      width: 100%;
+      padding: 10px var(--rwa-gap-md);
+      background: var(--rwa-surface-raised);
+      border: 1px solid var(--rwa-border);
+      border-radius: var(--rwa-radius-md);
+      color: var(--rwa-text-faint);
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: var(--rwa-gap-sm);
+      transition: all var(--rwa-duration-fast) var(--rwa-ease-soft);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--rwa-gap-sm);
+      letter-spacing: 0.3px;
+    }
+
+    #rwa-reset:hover {
+      background: var(--rwa-surface-hover);
+      border-color: var(--rwa-border-strong);
+      color: var(--rwa-text-muted);
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+
+    #rwa-reset:active {
+      transform: translateY(0);
+    }
+
+    #rwa-reset.success {
+      background: var(--rwa-green-soft);
+      border-color: rgba(74, 222, 128, 0.35);
+      color: var(--rwa-green);
+    }
+
+    /* ─── Footer ─── */
+    #rwa-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: var(--rwa-gap-sm) var(--rwa-gap-lg) var(--rwa-gap-md);
+      border-top: 1px solid var(--rwa-border);
+      background: rgba(0,0,0,0.12);
+    }
+
+    #rwa-footer-brand {
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--rwa-text-ghost);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    #rwa-footer-ver {
+      font-size: 10px;
+      color: var(--rwa-text-ghost);
+      font-family: 'SF Mono', Monaco, monospace;
+      font-weight: 500;
+      background: var(--rwa-surface-hover);
+      padding: 3px 8px;
+      border-radius: var(--rwa-radius-sm);
+      border: 1px solid var(--rwa-border);
+    }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 480px) {
+      #rwa-panel {
+        width: calc(100vw - 32px);
+        right: 16px;
+        bottom: 16px;
+        left: 16px;
+      }
+    }
+  `);
+
+  // ─── RAT ALERT ────────────────────────────────────────────────────
+  function playAlert() {
+    if (!SETTINGS.playSoundAlert) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const beep = (f, s, d) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.type = 'sine';
+        o.frequency.setValueAtTime(f, ctx.currentTime + s);
+        g.gain.setValueAtTime(0.22, ctx.currentTime + s);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + s + d);
+        o.start(ctx.currentTime + s);
+        o.stop(ctx.currentTime + s + d);
+      };
+      beep(880, 0, 0.12); beep(1100, 0.15, 0.12); beep(1320, 0.30, 0.22);
+    } catch (e) { console.warn('[RWA] sound error', e); }
+  }
+
+  // ─── NOTIFICATION ────────────────────────────────────────────
+  function sendNotification(title, body) {
+    if (!SETTINGS.browserNotif) return;
+    try {
+      GM_notification({ title, text: body, image: 'https://bigrat.monster/media/bigrat.jpg', timeout: 8000, onclick: () => window.focus() });
+    } catch {
+      if (Notification.permission === 'granted') {
+        const n = new Notification(title, { body });
+        n.onclick = () => window.focus();
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then(p => { if (p === 'granted') sendNotification(title, body); });
+      }
+    }
+  }
+
+  // || MATCHING ( PART OF DTC ) ||
+  function matchLicence(productName, duration) {
+    const pLower = productName.toLowerCase().trim();
+    const dLower = duration.toLowerCase().trim();
+    for (const [pk, pdata] of Object.entries(PRODUCTS)) {
+      if (pLower !== pdata.label.toLowerCase()) continue;
+      for (const [vk, variant] of Object.entries(pdata.variants)) {
+        if (!variant.enabled) continue;
+        if (!variant.durationKw || dLower.includes(variant.durationKw)) {
+          return { productKey: pk, variantKey: vk, product: pdata, variant };
+        }
+      }
+      if (SETTINGS.alertForUnknown) {
+        return { productKey: pk, variantKey: 'unknown', product: pdata, variant: null };
+      }
+      return null;
+    }
+    if (SETTINGS.alertForUnknown) return { productKey: 'unknown', variantKey: '', product: null, variant: null };
+    return null;
+  }
+
+  // || MAIN DTC ||
+  const CARD_SEL = 'button.weao-_730a2e';
+  const NAME_SEL = 'p.weao-_acd684';
+  const DUR_SEL = 'span.weao-_30b24a';
+
+  function findAvailableLicences() {
+    const results = [];
+    const recentEl = document.querySelector('div.weao-_ea4c6c');
+
+    document.querySelectorAll(CARD_SEL).forEach(card => {
+      if (recentEl && recentEl.contains(card)) return;
+      const stockText = card.innerText.toLowerCase();
+      if (stockText.includes('out of stock')) return;
+      const nameEl = card.querySelector(NAME_SEL);
+      const durEl = card.querySelector(DUR_SEL);
+      if (!nameEl) return;
+      const productName = nameEl.textContent.trim();
+      const duration = durEl ? durEl.textContent.trim() : '';
+      const match = matchLicence(productName, duration);
+      if (!match) return;
+      const title = duration ? productName + ' \u00b7 ' + duration : productName;
+      const uid = productName + '|' + duration;
+      results.push({ title, uid, element: card, ...match });
+    });
+    return results;
+  }
+
+  // || HANDLERS ||
+  function handleNewLicence(lic) {
+    const id = lic.uid || (lic.productKey + '|' + lic.variantKey);
+    if (seenLicences.has(id)) return;
+    seenLicences.add(id);
+    GM_setValue('seenLicences', [...seenLicences]);
+    const pLabel = lic.product ? lic.product.label : 'Unknown';
+    const vLabel = lic.variant ? lic.variant.label : '';
+    const color = lic.product ? lic.product.color : 'rgba(255,255,255,0.4)';
+    const fullLabel = vLabel ? pLabel + ' \u00b7 ' + vLabel : pLabel;
+    console.log('[RWA] LICENCE IN STOCK:', fullLabel, '| uid:', id);
+    setStatus('found', 'Available: ' + fullLabel);
+    addLog(pLabel, vLabel, color);
+    playAlert();
+    sendNotification(
+      '\uD83D\uDD11 ' + fullLabel + ' \u2014 Rock Weao Announcer',
+      'Licence available! Trying to claim!'
+    );
+    try {
+      lic.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      lic.element.style.outline = '3px solid ' + color;
+      lic.element.style.borderRadius = '10px';
+      lic.element.style.boxShadow = '0 0 18px ' + color + '55';
+    } catch (_) {}
+    if (SETTINGS.autoOpenTab) {
+      setTimeout(() => { try { lic.element.click(); } catch (_) {} }, 600);
+    }
+  }
+
+  // || POLLS ||
+  function poll() {
+    const cards = document.querySelectorAll(CARD_SEL);
+    console.log('CARDS FOUND:', cards.length);
+    cards.forEach(card => {
+      console.log({
+        text: card.innerText,
+        disabled: card.disabled,
+        aria: card.getAttribute('aria-disabled')
+      });
+    });
+    const found = findAvailableLicences();
+    console.log('AVAILABLE:', found);
+    if (found.length === 0) setStatus('watching', 'Waiting for licence\u2026');
+    found.forEach(handleNewLicence);
+  }
+
+  function startMonitor() {
+    if (monitorActive) return;
+    monitorActive = true;
+    poll();
+    setInterval(() => {
+      try {
+        poll();
+      } catch (e) {
+        console.error('[RWA ERROR]', e);
+      }
+    }, SETTINGS.pollInterval);
+  }
+
+  // ─── UI HELPERS ───────────────────────────────────────────────
+  function setStatus(state, text) {
+    const dot = document.getElementById('rwa-dot');
+    const label = document.getElementById('rwa-status-label');
+    const row = document.getElementById('rwa-status-row');
+    if (!dot || !label) return;
+    dot.className = state;
+    label.textContent = text;
+    label.className = state === 'found' ? 'found' : '';
+    if (row) row.classList.toggle('found', state === 'found');
+    if (uiPanel) uiPanel.classList.toggle('has-licence', state === 'found');
+  }
+
+  function addLog(productName, variantLabel, color) {
+    const logEl = document.getElementById('rwa-log');
+    const empty = document.getElementById('rwa-log-empty');
+    if (!logEl) return;
+    if (empty) empty.remove();
+    const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const entry = document.createElement('div');
+    entry.className = 'rwa-log-entry';
+    entry.innerHTML =
+      '<div class="rwa-log-dot" style="background:' + color + ';color:' + color + '"></div>' +
+      '<span class="rwa-log-time">' + t + '</span>' +
+      '<span class="rwa-log-name">' + productName + '</span>' +
+      '<span class="rwa-log-var">' + variantLabel + '</span>';
+    logEl.prepend(entry);
+  }
+
+  function makeToggle(id, checked, onChange) {
+    const lbl = document.createElement('label');
+    lbl.className = 'rwa-toggle';
+    const inp = document.createElement('input');
+    inp.type = 'checkbox'; inp.id = id; inp.checked = checked;
+    inp.addEventListener('change', () => onChange(inp.checked));
+    const track = document.createElement('div');
+    track.className = 'rwa-toggle-track';
+    lbl.appendChild(inp); lbl.appendChild(track);
+    return lbl;
+  }
+
+  function settingRow(html, control) {
+    const row = document.createElement('div');
+    row.className = 'rwa-s-row';
+    const lbl = document.createElement('div');
+    lbl.className = 'rwa-s-label';
+    lbl.innerHTML = html;
+    row.appendChild(lbl); row.appendChild(control);
+    return row;
+  }
+
+  // ─── BUILD PREFS PART ─────────────────────────────────────────
+  function buildPrefsContent() {
+    const wrap = document.createElement('div');
+    wrap.id = 'rwa-prefs-scroll';
+
+    const pl = document.createElement('div');
+    pl.className = 'rwa-sec-label'; pl.textContent = 'Licences to watch';
+    wrap.appendChild(pl);
+
+    for (const [pk, pdata] of Object.entries(PRODUCTS)) {
+      const block = document.createElement('div');
+      block.className = 'rwa-prod-block';
+      block.style.setProperty('--rwa-prod-color', pdata.color);
+
+      const hdr = document.createElement('div');
+      hdr.className = 'rwa-prod-hdr';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'rwa-prod-name';
+      const synzBorder = pk === 'synz' ? ' border:1px solid #334155;' : '';
+      nameEl.innerHTML = '<div class="rwa-prod-dot" style="background:' + pdata.color + ';color:' + pdata.color + ';' + synzBorder + '"></div>' + pdata.label;
+
+      const allBtn = document.createElement('div');
+      allBtn.className = 'rwa-prod-all';
+      const chipsRef = { el: null };
+
+      const refreshAllBtn = () => {
+        const allOn = Object.values(pdata.variants).every(v => v.enabled);
+        allBtn.textContent = allOn ? 'Disable all' : 'Enable all';
+      };
+      refreshAllBtn();
+
+      allBtn.addEventListener('click', () => {
+        const nowAllOn = Object.values(pdata.variants).every(v => v.enabled);
+        for (const v of Object.values(pdata.variants)) v.enabled = !nowAllOn;
+        saveVariants();
+        if (chipsRef.el) {
+          chipsRef.el.querySelectorAll('.rwa-vchip').forEach(c => {
+            c.classList.toggle('on', !nowAllOn);
+            c.style.background = !nowAllOn ? pdata.color + '25' : 'var(--rwa-surface-hover)';
+            c.style.borderColor = !nowAllOn ? (pk === 'synz' ? '#334155' : pdata.color + '60') : 'transparent';
+            c.style.color = !nowAllOn ? pdata.color : 'var(--rwa-text-faint)';
+          });
+        }
+        refreshAllBtn();
+      });
+
+      hdr.appendChild(nameEl); hdr.appendChild(allBtn);
+      block.appendChild(hdr);
+
+      const chips = document.createElement('div');
+      chips.className = 'rwa-variants';
+      chipsRef.el = chips;
+
+      for (const [vk, variant] of Object.entries(pdata.variants)) {
+        const chip = document.createElement('div');
+        chip.className = 'rwa-vchip' + (variant.enabled ? ' on' : '');
+        const isSynz = pk === 'synz';
+        chip.style.background = variant.enabled ? pdata.color + '25' : 'var(--rwa-surface-hover)';
+        chip.style.borderColor = variant.enabled
+          ? (isSynz ? '#334155' : pdata.color + '60')
+          : 'transparent';
+        chip.style.color = variant.enabled ? pdata.color : 'var(--rwa-text-faint)';
+        chip.style.setProperty('--rwa-prod-color', pdata.color);
+
+        chip.innerHTML = '<div class="rwa-vdot" style="background:' + pdata.color + '"></div>' + variant.label;
+
+        chip.addEventListener('click', () => {
+          variant.enabled = !variant.enabled;
+          chip.classList.toggle('on', variant.enabled);
+          chip.style.background = variant.enabled ? pdata.color + '25' : 'var(--rwa-surface-hover)';
+          chip.style.borderColor = variant.enabled
+            ? (isSynz ? '#334155' : pdata.color + '60')
+            : 'transparent';
+          chip.style.color = variant.enabled ? pdata.color : 'var(--rwa-text-faint)';
+          saveVariants();
+          refreshAllBtn();
+        });
+
+        chips.appendChild(chip);
+      }
+
+      block.appendChild(chips);
+      wrap.appendChild(block);
+    }
+
+    const div1 = document.createElement('div'); div1.className = 'rwa-divider';
+    wrap.appendChild(div1);
+
+    const sl = document.createElement('div'); sl.className = 'rwa-sec-label'; sl.textContent = 'Settings';
+    wrap.appendChild(sl);
+
+    wrap.appendChild(settingRow('Sound alerts', makeToggle('rwa-sound', SETTINGS.playSoundAlert, v => saveSetting('playSoundAlert', v))));
+    wrap.appendChild(settingRow('Browser notifications<<small>Desktop popup when licence drops</small>', makeToggle('rwa-browsernotif', SETTINGS.browserNotif, v => {
+      saveSetting('browserNotif', v);
+      if (v && Notification.permission === 'default') Notification.requestPermission();
+    })));
+    wrap.appendChild(settingRow('Auto-open licence page', makeToggle('rwa-autoopen', SETTINGS.autoOpenTab, v => saveSetting('autoOpenTab', v))));
+    wrap.appendChild(settingRow('Alert for unknown licences<<small>Anything not in list above</small>', makeToggle('rwa-unknown', SETTINGS.alertForUnknown, v => saveSetting('alertForUnknown', v))));
+     //intervals
+    const sel = document.createElement('select');
+    sel.className = 'rwa-select';
+    [[300,'0.3s'],[500,'0.5s'],[2000,'2s'],[4000,'4s'],[6000,'6s']].forEach(([val, lbl]) => {
+      const opt = document.createElement('option');
+      opt.value = val; opt.textContent = lbl;
+      if (SETTINGS.pollInterval === val) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener('change', () => saveSetting('pollInterval', parseInt(sel.value)));
+    wrap.appendChild(settingRow('Poll interval<<small>How often to check the page</small>', sel));
+
+    const div2 = document.createElement('div'); div2.className = 'rwa-divider';
+    wrap.appendChild(div2);
+
+    const resetBtn = document.createElement('button');
+    resetBtn.id = 'rwa-reset'; resetBtn.textContent = 'Reset seen licences';
+    resetBtn.addEventListener('click', () => {
+      seenLicences.clear();
+      GM_setValue('seenLicences', []);
+      const logEl = document.getElementById('rwa-log');
+      if (logEl) logEl.innerHTML = '<div id="rwa-log-empty">No licences detected yet\u2026</div>';
+      setStatus('watching', 'Waiting for licence\u2026');
+      if (uiPanel) uiPanel.classList.remove('has-licence');
+      resetBtn.innerHTML = ICON_CHECK + ' Reset';
+      resetBtn.classList.add('success');
+      setTimeout(() => {
+        resetBtn.textContent = 'Reset seen licences';
+        resetBtn.classList.remove('success');
+      }, 2000);
+    });
+    wrap.appendChild(resetBtn);
+    return wrap;
+  }
+
+  // ─── BUILD FULL UI ────────────────────────────────────────────
+  function createUI() {
+    const panel = document.createElement('div');
+    panel.id = 'rwa-panel';
+
+    // Header
+    const header = document.createElement('div');
+    header.id = 'rwa-header';
+    const titleWrap = document.createElement('div');
+    titleWrap.id = 'rwa-title-group';
+    titleWrap.innerHTML = '<div id="rwa-title">Rock <span id="rwa-title-accent">weao announcer</span></div><div id="rwa-subtitle">Licence Monitor</div>';
+    const minBtn = document.createElement('div');
+    minBtn.id = 'rwa-minimize-btn';
+    minBtn.innerHTML = ICON_MINIMIZE;
+    header.appendChild(titleWrap);
+    header.appendChild(minBtn);
+    panel.appendChild(header);
+
+    // Main area
+    const main = document.createElement('div');
+    main.id = 'rwa-main';
+
+    // Sidebar
+    const sidebar = document.createElement('div');
+    sidebar.id = 'rwa-sidebar';
+
+    const monitorBtn = document.createElement('div');
+    monitorBtn.className = 'rwa-tab-btn active';
+    monitorBtn.dataset.tab = 'monitor';
+    monitorBtn.innerHTML = ICON_MONITOR;
+    monitorBtn.title = 'Monitor';
+
+    const prefsBtn = document.createElement('div');
+    prefsBtn.className = 'rwa-tab-btn';
+    prefsBtn.dataset.tab = 'prefs';
+    prefsBtn.innerHTML = ICON_PREFS;
+    prefsBtn.title = 'Preferences';
+
+    sidebar.appendChild(monitorBtn);
+    sidebar.appendChild(prefsBtn);
+
+    // Content
+    const content = document.createElement('div');
+    content.id = 'rwa-content';
+
+    // Monitor pane
+    const monitorPane = document.createElement('div');
+    monitorPane.className = 'rwa-tab-pane active';
+    monitorPane.dataset.pane = 'monitor';
+    monitorPane.innerHTML =
+      '<div id="rwa-status-row">' +
+      '<div id="rwa-dot" class="watching"></div>' +
+      '<div id="rwa-status-label">Waiting for licence\u2026</div>' +
+      '</div>' +
+      '<div id="rwa-log"><div id="rwa-log-empty">No licences detected yet\u2026</div></div>';
+
+    // Prefs pane
+    const prefsPane = document.createElement('div');
+    prefsPane.className = 'rwa-tab-pane';
+    prefsPane.dataset.pane = 'prefs';
+    prefsPane.appendChild(buildPrefsContent());
+
+    content.appendChild(monitorPane);
+    content.appendChild(prefsPane);
+
+    main.appendChild(sidebar);
+    main.appendChild(content);
+    panel.appendChild(main);
+
+    // Footer
+    const footer = document.createElement('div');
+    footer.id = 'rwa-footer';
+    footer.innerHTML = '<span id="rwa-footer-brand">Rock Weao Announcer</span><span id="rwa-footer-ver">v2.7.0</span>';
+    panel.appendChild(footer);
+
+    document.body.appendChild(panel);
+    uiPanel = panel;
+
+    // Tab switching
+    [monitorBtn, prefsBtn].forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.tab;
+        if (key === activeTab) return;
+        activeTab = key;
+        [monitorBtn, prefsBtn].forEach(b => b.classList.toggle('active', b.dataset.tab === key));
+        content.querySelectorAll('.rwa-tab-pane').forEach(p => p.classList.toggle('active', p.dataset.pane === key));
+      });
+    });
+
+    // Minimize
+    minBtn.addEventListener('click', () => {
+      isMinimized = !isMinimized;
+      main.classList.toggle('collapsed', isMinimized);
+      footer.style.display = isMinimized ? 'none' : '';
+      minBtn.innerHTML = isMinimized ? ICON_EXPAND : ICON_MINIMIZE;
+    });
+
+    makeDraggable(panel, header);
+  }
+
+  // ─── DRAG ─────────────────────────────────────────────────────
+  // COMPLETELY REWRITTEN: uses getBoundingClientRect for viewport-relative positioning
+  // and correct delta math. No more offsetTop/offsetLeft bugs.
+  function makeDraggable(el, handle) {
+    let isDragging = false;
+    let startX = 0, startY = 0;
+    let startLeft = 0, startTop = 0;
+
+    handle.addEventListener('mousedown', e => {
+      if (e.target.closest('#rwa-minimize-btn')) return;
+      e.preventDefault();
+
+      const rect = el.getBoundingClientRect();
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = rect.left;
+      startTop = rect.top;
+
+      isDragging = true;
+      document.body.style.cursor = 'grabbing';
+      handle.style.cursor = 'grabbing';
+      el.style.transition = 'none'; // Disable transitions during drag for responsiveness
+
+      const onMove = e2 => {
+        if (!isDragging) return;
+        const dx = e2.clientX - startX;
+        const dy = e2.clientY - startY;
+        el.style.left = (startLeft + dx) + 'px';
+        el.style.top = (startTop + dy) + 'px';
+        el.style.right = 'auto';
+        el.style.bottom = 'auto';
+      };
+
+      const onUp = () => {
+        isDragging = false;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+        handle.style.cursor = 'grab';
+        el.style.transition = ''; // Re-enable transitions
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // ─── INIT ─────────────────────────────────────────────────────
+  function init() {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+    createUI();
+    startMonitor();
+  }
+
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      init();
+    }, 5000);
+  });
+
+})();
